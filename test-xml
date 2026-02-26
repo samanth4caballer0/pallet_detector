@@ -1,0 +1,140 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="camera_stand">
+    <static>true</static>
+
+    <link name="stand_link">
+      <!-- Lift the link so the 0.8m-tall box sits on the ground -->
+      <pose>0 0 0.4 0 0 0</pose>
+
+      <collision name="stand_collision">
+        <geometry>
+          <box><size>0.4 0.4 0.8</size></box>
+        </geometry>
+      </collision>
+
+      <visual name="stand_visual">
+        <geometry>
+          <box><size>0.4 0.4 0.8</size></box>
+        </geometry>
+        <material>
+          <ambient>0.2 0.2 0.2 1</ambient>
+          <diffuse>0.2 0.2 0.2 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- Optional: a small visible camera body -->
+      <visual name="camera_body">
+        <!-- relative to stand_link frame (which is already at z=0.4) -->
+        <pose>0 0 0.6 0 0 0</pose> <!-- 0.4 + 0.6 = 1.0m above ground -->
+        <geometry>
+          <box><size>0.08 0.04 0.03</size></box>
+        </geometry>
+      </visual>
+
+      <sensor name="rgbd_camera" type="depth">
+        <!-- stand_link is lifted to z=0.4, so 0.6 here puts camera at 1.0m above ground -->
+        <pose>0 0 0.6 0 -0.4 0</pose> <!-- pitch down a bit towards the pallet -->
+        <visualize>true</visualize>
+        <always_on>true</always_on>
+        <update_rate>30</update_rate>
+
+        <camera>
+          <horizontal_fov>1.047</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.2</near>
+            <far>8.0</far>
+          </clip>
+        </camera>
+
+        <plugin name="gazebo_ros_openni_kinect" filename="libgazebo_ros_openni_kinect.so">
+          <robotNamespace>/demo</robotNamespace>
+          <frameName>rgbd_camera_link</frameName>
+
+          <!-- RGB topics -->
+          <cameraName>rgb</cameraName>
+          <imageTopicName>rgb/image_raw</imageTopicName>
+          <cameraInfoTopicName>rgb/camera_info</cameraInfoTopicName>
+
+          <!-- Depth topics -->
+          <depthImageTopicName>depth/image_raw</depthImageTopicName>
+          <depthImageInfoTopicName>depth/camera_info</depthImageInfoTopicName>
+
+          <!-- Point cloud -->
+          <pointCloudTopicName>depth/points</pointCloudTopicName>
+
+          <!-- Limits -->
+          <pointCloudCutoff>0.2</pointCloudCutoff>
+          <pointCloudCutoffMax>8.0</pointCloudCutoffMax>
+        </plugin>
+      </sensor>
+    </link>
+  </model>
+</sdf>
+
+      <!-- <sensor name="front_camera" type="camera">
+        <!-- camera at 1.0m above ground -->
+        <pose>0 0 0.6 0 0 0</pose>
+
+        <!-- Set true if you want to visualize the frustum in Gazebo -->
+        <visualize>true</visualize>
+
+        <always_on>true</always_on>
+        <update_rate>30</update_rate>
+
+        <camera>
+          <horizontal_fov>1.047</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.05</near>
+            <far>50</far>
+          </clip>
+        </camera>
+
+        <plugin name="gazebo_ros_camera" filename="libgazebo_ros_camera.so">
+          <robotNamespace>/demo</robotNamespace>
+          <cameraName>front_camera</cameraName>
+          <imageTopicName>image_raw</imageTopicName>
+          <cameraInfoTopicName>camera_info</cameraInfoTopicName>
+          <frameName>front_camera_link</frameName>
+        </plugin>
+      </sensor> -->
+
+
+      <visual name="camera_body">
+        <!-- relative to stand_link frame (which is already at z=0.25) -->
+        <pose>0 0 0.265 0 0 0</pose> <!-- 0.25 + 0.265 = 0.515m above ground, sitting flat on stand -->
+        <geometry>
+          <box><size>0.08 0.04 0.03</size></box>
+        </geometry>
+      </visual>
+
+        <plugin name="gazebo_ros_openni_kinect" filename="libgazebo_ros_depth_camera.so">
+          <robotNamespace>/demo</robotNamespace>
+          <frameName>rgbd_camera_link</frameName>
+
+          <!-- RGB topics -->
+          <cameraName>rgb</cameraName>
+          <imageTopicName>rgb/image_raw</imageTopicName>
+          <cameraInfoTopicName>rgb/camera_info</cameraInfoTopicName>
+
+          <!-- Depth topics -->
+          <depthImageTopicName>depth/image_raw</depthImageTopicName>
+          <depthImageInfoTopicName>depth/camera_info</depthImageInfoTopicName>
+
+          <!-- Point cloud -->
+          <pointCloudTopicName>depth/points</pointCloudTopicName>
+
+          <!-- Limits -->
+          <pointCloudCutoff>0.2</pointCloudCutoff>
+          <pointCloudCutoffMax>8.0</pointCloudCutoffMax>
+        </plugin>

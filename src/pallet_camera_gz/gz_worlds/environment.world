@@ -1,0 +1,26 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="pallet_camera_world">
+
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- Camera stand at origin -->
+    <include>
+      <uri>model://camera_stand</uri>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+
+    <!-- Pallet 2m in front of the stand -->
+    <include>
+      <uri>model://pallet</uri>
+      <pose>2 0 0.075 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

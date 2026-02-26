@@ -1,0 +1,12 @@
+<launch>
+  <env name="GAZEBO_MODEL_PATH"
+       value="$(find pallet_camera_gz)/models:$(optenv GAZEBO_MODEL_PATH)" />
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find pallet_camera_gz)/gz_worlds/pallet_camera.world"/>
+    <arg name="gui" value="true"/>
+  </include>
+
+  <!-- optional -->
+  <node pkg="pallet_camera_gz" type="publish_camera_tf.py" name="publish_camera_tf" output="screen"/>
+</launch>

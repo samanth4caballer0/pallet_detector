@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="camera_stand">
+    <static>true</static>
+
+    <link name="stand_link">
+      <!-- Lift the link so the 0.5m-tall box sits on the ground -->
+      <pose>0 0 0.25 0 0 0</pose>
+
+      <collision name="stand_collision">
+        <geometry>
+          <box><size>0.4 0.4 0.5</size></box>
+        </geometry>
+      </collision>
+
+      <visual name="stand_visual">
+        <geometry>
+          <box><size>0.4 0.4 0.5</size></box>
+        </geometry>
+        <material>
+          <ambient>0.2 0.2 0.2 1</ambient>
+          <diffuse>0.2 0.2 0.2 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- Small visible camera body -->
+      <visual name="camera_body">
+        <pose>0.25 0 0.30 0 0 0</pose>
+        <geometry>
+          <box><size>0.08 0.04 0.03</size></box>
+        </geometry>
+      </visual>
+
+      <!-- RGBD sensor (depth camera plugin publishes RGB, depth, and pointcloud) -->
+      <sensor name="rgbd_camera" type="depth">
+        <!-- Move camera slightly forward (+X) and up, then pitch down -0.6 pitch or <pose>0.25 0 0.30 0 -1.2 0</pose>-->
+        <pose>0.25 0 0.30 0 0 0</pose>  
+        <visualize>true</visualize>
+        <always_on>true</always_on>
+        <update_rate>30</update_rate>
+
+        <camera>
+          <horizontal_fov>1.047</horizontal_fov>
+
+          <!-- RGB image -->
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+
+          <clip>
+            <near>0.05</near>
+            <far>8.0</far>
+          </clip>
+        </camera>
+
+        <plugin name="gazebo_ros_depth_camera" filename="libgazebo_ros_depth_camera.so">
+          <!-- Namespace for ROS topics -->
+          <robotNamespace>/demo</robotNamespace>
+
+          <!-- REQUIRED: avoids your warning and makes dynamic_reconfigure work -->
+          <cameraName>rgbd_camera</cameraName>
+
+          <!-- TF frame -->
+          <frameName>rgbd_camera_link</frameName>
+
+          <!-- RGB topics (NOTE: no extra "rgb/" namespace automatically added) -->
+          <imageTopicName>rgb/image_raw</imageTopicName>
+          <cameraInfoTopicName>rgb/camera_info</cameraInfoTopicName>
+
+          <!-- Depth topics -->
+          <depthImageTopicName>depth/image_raw</depthImageTopicName>
+          <depthImageInfoTopicName>depth/camera_info</depthImageInfoTopicName>
+
+          <!-- Point cloud -->
+          <pointCloudTopicName>depth/points</pointCloudTopicName>
+
+          <!-- Range limits -->
+          <pointCloudCutoff>0.2</pointCloudCutoff>
+          <pointCloudCutoffMax>8.0</pointCloudCutoffMax>
+        </plugin>
+      </sensor>
+    </link>
+  </model>
+</sdf>
