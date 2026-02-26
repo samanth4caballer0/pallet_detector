@@ -1,2 +1,9 @@
 digraph G {
-"no tf data recieved"}
+"stand_link" -> "rgbd_camera_link"[label="Broadcaster: /camera_stand_tf_publisher\nAverage rate: 10000.000 Hz\nMost recent transform: 0.000 ( 590.282 sec old)\nBuffer length: 0.000 sec\n"];
+"world" -> "stand_link"[label="Broadcaster: /camera_stand_tf_publisher\nAverage rate: 49.990 Hz\nMost recent transform: 590.281 ( 0.001 sec old)\nBuffer length: 4.881 sec\n"];
+"rgbd_camera_link" -> "rgbd_camera_optical_frame"[label="Broadcaster: /static_transform_publisher_1772120509071960989\nAverage rate: 10000.000 Hz\nMost recent transform: 0.000 ( 590.282 sec old)\nBuffer length: 0.000 sec\n"];
+edge [style=invis];
+ subgraph cluster_legend { style=bold; color=black; label ="view_frames Result";
+"Recorded at time: 590.282"[ shape=plaintext ] ;
+ }->"world";
+}

@@ -63,7 +63,8 @@
           <cameraName>rgbd_camera</cameraName>
 
           <!-- TF frame -->
-          <frameName>rgbd_camera_link</frameName>
+          <!-- <frameName>rgbd_camera_link</frameName> -->
+          <frameName>rgbd_camera_optical_frame</frameName>
 
           <!-- RGB topics (NOTE: no extra "rgb/" namespace automatically added) -->
           <imageTopicName>rgb/image_raw</imageTopicName>
