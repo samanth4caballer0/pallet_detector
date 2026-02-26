@@ -14,12 +14,12 @@ def main():
     static_br = tf2_ros.StaticTransformBroadcaster()
 
     # Static TF: stand_link -> rgbd_camera_link
-    # This MUST match your SDF sensor pose:
-    # <pose>0.25 0 0.30 0 -0.6 0</pose>
+    # This MUST match SDF sensor pose:
+    # <pose>0.25 0 0.30 0 0 0</pose>
     # Pose order: x y z roll pitch yaw
     import tf.transformations as tft
     x, y, z = 0.25, 0.0, 0.30
-    roll, pitch, yaw = 0.0, -0.6, 0.0
+    roll, pitch, yaw = 0.0, 0.0, 0.0
     q = tft.quaternion_from_euler(roll, pitch, yaw)
 
     st = TransformStamped()
@@ -36,7 +36,7 @@ def main():
     static_br.sendTransform(st)
 
     # Dynamic TF: world -> stand_link from Gazebo
-    state = {"idx": None}
+    state = {"idx": None, "pose": None, "rot": None}
 
     def cb(msg: LinkStates):
         if state["idx"] is None:
@@ -47,11 +47,17 @@ def main():
                 return
 
         i = state["idx"]
-        p = msg.pose[i].position
-        o = msg.pose[i].orientation
+        state["pose"] = msg.pose[i].position
+        state["rot"]  = msg.pose[i].orientation
+
+    def pub_timer(event):
+        if state["pose"] is None:
+            return
+        p = state["pose"]
+        o = state["rot"]
 
         t = TransformStamped()
-        t.header.stamp = rospy.Time.now()
+        t.header.stamp = rospy.Time.now()  # sim time
         t.header.frame_id = "world"
         t.child_frame_id = "stand_link"
         t.transform.translation.x = p.x
@@ -61,6 +67,7 @@ def main():
         br.sendTransform(t)
 
     rospy.Subscriber("/gazebo/link_states", LinkStates, cb, queue_size=1)
+    rospy.Timer(rospy.Duration(1.0/30.0), pub_timer)
     rospy.spin()
 
 if __name__ == "__main__":
