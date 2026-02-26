@@ -12,14 +12,6 @@ ROS packages for pallet detector. Includes:
 - ROS Noetic 
 - Gazebo 
 
-## How to Build
-
-```bash
-cd ~/ros_docker_ws
-catkin_make
-source devel/setup.bash
-```
-
 ## How to Run
 
 To launch the Gazebo simulation with the camera stand and pallet:
