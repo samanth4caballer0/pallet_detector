@@ -10,7 +10,7 @@
     <arg name="gui" value="true"/>
   </include>
 
-  <!-- Publish world -> stand_link (and stand_link -> rgbd_camera_link if your script does that) -->
+  <!-- Publish world -> base_link and base_link -> rgbd_camera_link -->
   <node pkg="pallet_camera_gz" type="publish_camera_tf.py"
         name="camera_stand_tf_publisher" output="screen"/>
 

@@ -62,8 +62,7 @@
           <!-- REQUIRED: avoids your warning and makes dynamic_reconfigure work -->
           <cameraName>rgbd_camera</cameraName>
 
-          <!-- TF frame -->
-          <!-- <frameName>rgbd_camera_link</frameName> -->
+          <!-- TF frame (must match the optical frame published in the launch file) -->
           <frameName>rgbd_camera_optical_frame</frameName>
 
           <!-- RGB topics (NOTE: no extra "rgb/" namespace automatically added) -->
