@@ -18,7 +18,7 @@
 
     <!-- Pallet 2m in front of the stand -->
     <include>
-      <uri>model://pallet</uri>
+      <uri>model://pallet_realistic</uri>
       <pose>2 0 0.075 0 0 0</pose>
     </include>
 
