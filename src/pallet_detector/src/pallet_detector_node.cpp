@@ -8,7 +8,7 @@
 
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
-#include <pcl/filters/passthrough.h>
+#include <pcl/filters/crop_box.h> //instead of passthrough for 3D ROI
 #include <pcl/filters/statistical_outlier_removal.h>
 
 #include <pcl/segmentation/sac_segmentation.h>
@@ -30,20 +30,20 @@ public:
   using PointT = pcl::PointXYZ;
   using CloudT = pcl::PointCloud<PointT>;
 
-  PalletDetector(ros::NodeHandle& nh, ros::NodeHandle& pnh)
-  : nh_(nh), pnh_(pnh)
+  PalletDetector(ros::NodeHandle &nh, ros::NodeHandle &pnh)
+      : nh_(nh), pnh_(pnh)
   {
     // Parameters
-    pnh_.param<std::string>("cloud_topic", cloud_topic_, "/demo/rgb/depth/points");
+    pnh_.param<std::string>("cloud_topic", cloud_topic_, "/demo/rgbd_camera/depth/points");
     pnh_.param<std::string>("output_frame", output_frame_, ""); // leave empty to use incoming frame
 
     // ROI
-    pnh_.param("x_min", x_min_, 0.2);
-    pnh_.param("x_max", x_max_, 5.0);
-    pnh_.param("y_min", y_min_, -2.0);
-    pnh_.param("y_max", y_max_, 2.0);
-    pnh_.param("z_min", z_min_, -1.0);
-    pnh_.param("z_max", z_max_, 2.0);
+    pnh_.param("x_min", x_min_, -1.2);
+    pnh_.param("x_max", x_max_, 1.2);
+    pnh_.param("y_min", y_min_, 0.2);
+    pnh_.param("y_max", y_max_, 1.0);
+    pnh_.param("z_min", z_min_, 1.0);
+    pnh_.param("z_max", z_max_, 3.5);
 
     // Filtering
     pnh_.param("voxel_leaf", voxel_leaf_, 0.02); // meters
@@ -62,62 +62,96 @@ public:
 
     // Pallet expected dims (meters)
     pnh_.param("pallet_length", pallet_L_, 1.2);
-    pnh_.param("pallet_width",  pallet_W_, 0.8);
+    pnh_.param("pallet_width", pallet_W_, 0.8);
     pnh_.param("pallet_height", pallet_H_, 0.15);
 
     pnh_.param("tol_length", tol_L_, 0.10);
-    pnh_.param("tol_width",  tol_W_, 0.10);
+    pnh_.param("tol_width", tol_W_, 0.10);
     pnh_.param("tol_height", tol_H_, 0.06);
 
     sub_ = nh_.subscribe(cloud_topic_, 1, &PalletDetector::cloudCb, this);
 
-    pose_pub_   = nh_.advertise<geometry_msgs::PoseStamped>("pallet_pose", 1);
+    pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("pallet_pose", 1);
     marker_pub_ = nh_.advertise<visualization_msgs::Marker>("pallet_marker", 1);
+    roi_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("cloud_roi", 1);
+    no_plane_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("cloud_no_plane", 1);
 
     ROS_INFO_STREAM("pallet_detector: subscribing to " << cloud_topic_);
   }
 
-private:
-  void cloudCb(const sensor_msgs::PointCloud2ConstPtr& msg)
+private: // MAIN CALLBACK
+  void cloudCb(const sensor_msgs::PointCloud2ConstPtr &msg)
   {
     CloudT::Ptr cloud(new CloudT);
     pcl::fromROSMsg(*msg, *cloud);
-    if (cloud->empty()) return;
+    if (cloud->empty())
+      return;
 
     const std::string frame = output_frame_.empty() ? msg->header.frame_id : output_frame_;
 
-    // 1) ROI pass-through
-    CloudT::Ptr roi(new CloudT);
-    roi = passThroughXYZ(cloud);
+    // 1) ROI crop box
+    CloudT::Ptr roi(new CloudT);    // output cloud after ROI crop
+    roi = cropBoxROI(cloud);        
+
+    // publish ROI cloud for debug visualisation
+    if (roi_pub_.getNumSubscribers() > 0)
+    {
+      sensor_msgs::PointCloud2 roi_msg;
+      pcl::toROSMsg(*roi, roi_msg);
+      roi_msg.header = msg->header;
+      roi_pub_.publish(roi_msg);
+    }
 
     // 2) Voxel downsample
-    CloudT::Ptr ds(new CloudT);
-    pcl::VoxelGrid<PointT> vg;
+    CloudT::Ptr ds(new CloudT);   // output cloud after downsampling
+    pcl::VoxelGrid<PointT> vg;    
     vg.setInputCloud(roi);
     vg.setLeafSize(voxel_leaf_, voxel_leaf_, voxel_leaf_);
     vg.filter(*ds);
-    if (ds->size() < 100) return;
+    if (ds->size() < 100)
+      return;
 
     // 3) Optional outlier removal
     CloudT::Ptr filtered(new CloudT);
-    if (use_sor_) {
+    if (use_sor_)
+    {
       pcl::StatisticalOutlierRemoval<PointT> sor;
       sor.setInputCloud(ds);
       sor.setMeanK(sor_mean_k_);
       sor.setStddevMulThresh(sor_stddev_);
       sor.filter(*filtered);
-    } else {
+    }
+    else
+    {
       filtered = ds;
     }
 
     // 4) Plane segmentation (remove floor/table)
     CloudT::Ptr no_plane(new CloudT);
     removeDominantPlane(filtered, no_plane);
-    if (no_plane->size() < 200) return;
+    if (no_plane->size() < 200)
+      return;
+
+    // publish no-plane cloud for debug visualisation (floor removed)
+    if (no_plane_pub_.getNumSubscribers() > 0)
+    {
+      sensor_msgs::PointCloud2 np_msg;
+      pcl::toROSMsg(*no_plane, np_msg);
+      np_msg.header = msg->header;
+      no_plane_pub_.publish(np_msg);
+    }
 
     // 5) Euclidean clustering
     std::vector<pcl::PointIndices> cluster_indices;
     euclideanClusters(no_plane, cluster_indices);
+
+    ROS_INFO_STREAM("Number of clusters detected: " << cluster_indices.size());
+    ROS_INFO_STREAM_THROTTLE(1.0, "cloud=" << cloud->size()
+                                           << " roi=" << roi->size()
+                                           << " ds=" << ds->size()
+                                           << " filtered=" << filtered->size()
+                                           << " no_plane=" << no_plane->size()
+                                           << " clusters=" << cluster_indices.size());
 
     // 6) Score clusters by geometry, pick best
     bool found = false;
@@ -125,17 +159,19 @@ private:
     visualization_msgs::Marker best_marker;
     double best_score = 1e9;
 
-    for (const auto& idx : cluster_indices)
+    for (const auto &idx : cluster_indices)
     {
       CloudT::Ptr cluster(new CloudT);
       cluster->reserve(idx.indices.size());
-      for (int i : idx.indices) cluster->push_back((*no_plane)[i]);
+      for (int i : idx.indices)
+        cluster->push_back((*no_plane)[i]);
 
       // Compute OBB
       Eigen::Vector3f obb_pos;
       Eigen::Matrix3f obb_rot;
       Eigen::Vector3f obb_min, obb_max;
-      if (!computeOBB(cluster, obb_pos, obb_rot, obb_min, obb_max)) continue;
+      if (!computeOBB(cluster, obb_pos, obb_rot, obb_min, obb_max))
+        continue;
 
       Eigen::Vector3f dims = (obb_max - obb_min).cwiseAbs();
       std::vector<float> d = {dims.x(), dims.y(), dims.z()};
@@ -146,9 +182,12 @@ private:
       std::sort(pd.begin(), pd.end());
 
       // Gate: check size within tolerances
-      if (std::abs(d[2] - pd[2]) > tol_L_) continue; // largest ~ length
-      if (std::abs(d[1] - pd[1]) > tol_W_) continue; // middle ~ width
-      if (std::abs(d[0] - pd[0]) > tol_H_) continue; // smallest ~ height
+      if (std::abs(d[2] - pd[2]) > tol_L_)
+        continue; // largest ~ length
+      if (std::abs(d[1] - pd[1]) > tol_W_)
+        continue; // middle ~ width
+      if (std::abs(d[0] - pd[0]) > tol_H_)
+        continue; // smallest ~ height
 
       // Score: sum absolute errors
       double score = std::abs(d[2] - pd[2]) + std::abs(d[1] - pd[1]) + std::abs(d[0] - pd[0]);
@@ -177,36 +216,36 @@ private:
 
     if (found)
     {
+      ROS_INFO_STREAM_THROTTLE(1.0, "PALLET DETECTED: score=" << best_score
+        << " pos=(" << best_pose.pose.position.x
+        << ", " << best_pose.pose.position.y
+        << ", " << best_pose.pose.position.z << ")");
       pose_pub_.publish(best_pose);
       marker_pub_.publish(best_marker);
     }
+    else
+    {
+      ROS_WARN_STREAM_THROTTLE(2.0, "No pallet found. clusters=" << cluster_indices.size()
+        << " (check dims/tolerances or cluster_min_size)");
+    }
   }
 
-  CloudT::Ptr passThroughXYZ(const CloudT::Ptr& in)
+  CloudT::Ptr cropBoxROI(const CloudT::Ptr &in)
   {
-    CloudT::Ptr out_x(new CloudT), out_y(new CloudT), out_z(new CloudT);
-
-    pcl::PassThrough<PointT> pass;
-    pass.setInputCloud(in);
-
-    pass.setFilterFieldName("x");
-    pass.setFilterLimits(x_min_, x_max_);
-    pass.filter(*out_x);
-
-    pass.setInputCloud(out_x);
-    pass.setFilterFieldName("y");
-    pass.setFilterLimits(y_min_, y_max_);
-    pass.filter(*out_y);
-
-    pass.setInputCloud(out_y);
-    pass.setFilterFieldName("z");
-    pass.setFilterLimits(z_min_, z_max_);
-    pass.filter(*out_z);
-
-    return out_z;
+    // Axis convention (optical frame):
+    //   x = left/right (side)
+    //   y = up/down (vertical)
+    //   z = forward (depth)
+    CloudT::Ptr out(new CloudT);
+    pcl::CropBox<PointT> crop;
+    crop.setInputCloud(in);
+    crop.setMin(Eigen::Vector4f(x_min_, y_min_, z_min_, 1.0f));
+    crop.setMax(Eigen::Vector4f(x_max_, y_max_, z_max_, 1.0f));
+    crop.filter(*out);
+    return out;
   }
 
-  void removeDominantPlane(const CloudT::Ptr& in, CloudT::Ptr& out)
+  void removeDominantPlane(const CloudT::Ptr &in, CloudT::Ptr &out)
   {
     pcl::SACSegmentation<PointT> seg;
     seg.setOptimizeCoefficients(true);
@@ -221,7 +260,8 @@ private:
     seg.segment(*inliers, *coeff);
 
     // If no plane found, return original
-    if (inliers->indices.empty()) {
+    if (inliers->indices.empty())
+    {
       out = in;
       return;
     }
@@ -233,7 +273,7 @@ private:
     ex.filter(*out);
   }
 
-  void euclideanClusters(const CloudT::Ptr& in, std::vector<pcl::PointIndices>& clusters)
+  void euclideanClusters(const CloudT::Ptr &in, std::vector<pcl::PointIndices> &clusters)
   {
     pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
     tree->setInputCloud(in);
@@ -247,13 +287,14 @@ private:
     ec.extract(clusters);
   }
 
-  bool computeOBB(const CloudT::Ptr& cluster,
-                  Eigen::Vector3f& obb_pos,
-                  Eigen::Matrix3f& obb_rot,
-                  Eigen::Vector3f& obb_min,
-                  Eigen::Vector3f& obb_max)
+  bool computeOBB(const CloudT::Ptr &cluster,
+                  Eigen::Vector3f &obb_pos,
+                  Eigen::Matrix3f &obb_rot,
+                  Eigen::Vector3f &obb_min,
+                  Eigen::Vector3f &obb_max)
   {
-    if (cluster->size() < 50) return false;
+    if (cluster->size() < 50)
+      return false;
 
     pcl::MomentOfInertiaEstimation<PointT> moi;
     moi.setInputCloud(cluster);
@@ -270,11 +311,11 @@ private:
     return true;
   }
 
-  visualization_msgs::Marker makeOBBMarker(const std_msgs::Header& hdr,
-                                           const std::string& frame,
-                                           const Eigen::Vector3f& pos,
-                                           const Eigen::Matrix3f& rot,
-                                           const Eigen::Vector3f& dims)
+  visualization_msgs::Marker makeOBBMarker(const std_msgs::Header &hdr,
+                                           const std::string &frame,
+                                           const Eigen::Vector3f &pos,
+                                           const Eigen::Matrix3f &rot,
+                                           const Eigen::Vector3f &dims)
   {
     visualization_msgs::Marker m;
     m.header = hdr;
@@ -309,7 +350,7 @@ private:
 private:
   ros::NodeHandle nh_, pnh_;
   ros::Subscriber sub_;
-  ros::Publisher pose_pub_, marker_pub_;
+  ros::Publisher pose_pub_, marker_pub_, roi_pub_, no_plane_pub_;
 
   std::string cloud_topic_;
   std::string output_frame_;
@@ -331,7 +372,7 @@ private:
   double tol_L_, tol_W_, tol_H_;
 };
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
   ros::init(argc, argv, "pallet_detector");
   ros::NodeHandle nh;

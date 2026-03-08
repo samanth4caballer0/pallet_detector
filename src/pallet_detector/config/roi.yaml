@@ -1,0 +1,52 @@
+# Pallet Detector Parameters
+# Parameter names must match pnh_.param("name", ...) calls in pallet_detector_node.cpp
+#
+# Axis convention (camera frame):
+#   x = left/right (side)  → x_min / x_max
+#   y = up/down (vertical) → y_min / y_max
+#   z = forward (depth)    → z_min / z_max
+#
+# ROI v1 (safe / wide) — uncomment v1.5 block and comment v1 to tighten after confirmation
+
+# ----- ROI v1 (safe) -----
+x_min: -1.5
+x_max:  1.5
+y_min:  0.2
+y_max:  1.0
+z_min:  1.0
+z_max:  3.5
+
+# ----- ROI v1.5 (tighter, after pallet detection confirmed) -----
+# x_min: -1.0
+# x_max:  1.0
+# y_min: -1.0
+# y_max:  1.0
+# z_min:  1.2
+# z_max:  3.0
+
+# Voxel downsampling
+voxel_leaf: 0.02
+
+# Statistical Outlier Removal (SOR) — disabled by default
+use_sor: false
+sor_mean_k: 30
+sor_stddev: 1.0
+
+# Plane removal (floor/dominant flat surface)
+plane_dist_thresh: 0.02
+plane_max_iters: 100
+
+# Euclidean clustering
+cluster_tolerance: 0.05
+cluster_min_size: 300
+cluster_max_size: 200000
+
+# Expected pallet dimensions (meters)
+pallet_length: 1.2
+pallet_width:  0.8
+pallet_height: 0.15
+
+# Size-match tolerances (meters)
+tol_length: 0.10
+tol_width:  0.10
+tol_height: 0.06

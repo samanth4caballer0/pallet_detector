@@ -51,7 +51,7 @@
 
           <clip>
             <near>0.05</near>
-            <far>3.0</far>
+            <far>10.0</far>
           </clip>
         </camera>
 
@@ -78,7 +78,7 @@
 
           <!-- Range limits -->
           <pointCloudCutoff>0.2</pointCloudCutoff>
-          <pointCloudCutoffMax>8.0</pointCloudCutoffMax>
+          <pointCloudCutoffMax>10.0</pointCloudCutoffMax>
         </plugin>
       </sensor>
     </link>

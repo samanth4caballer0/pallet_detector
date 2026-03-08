@@ -1,0 +1,9 @@
+<launch>
+  <node name="pallet_detector" pkg="pallet_detector" type="pallet_detector_node" output="screen">
+    <!-- Load all parameters from config file into this node's private namespace -->
+    <rosparam file="$(find pallet_detector)/config/roi.yaml" command="load" />
+
+    <!-- Override cloud topic if needed -->
+    <param name="cloud_topic" value="/demo/rgbd_camera/depth/points" />
+  </node>
+</launch>
