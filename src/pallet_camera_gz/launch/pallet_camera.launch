@@ -2,7 +2,7 @@
   <arg name="use_rviz" default="true"/>
   <arg name="rviz_config" default="$(find pallet_camera_gz)/pcd_inspect.rviz"/>
 
-  <!-- Use Gazebo sim time (set early) -->
+  <!--set early-->
   <param name="use_sim_time" value="true"/>
 
   <env name="GAZEBO_MODEL_PATH"
@@ -13,14 +13,26 @@
     <arg name="gui" value="true"/>
   </include>
 
-  <!-- Publish world -> base_link and base_link -> rgbd_camera_link -->
+  <!-- Load camera stand URDF -->
+  <param name="robot_description"
+         textfile="$(find pallet_camera_gz)/urdf/camera_stand.urdf"/>
+
+  <!-- Spawn camera stand in Gazebo -->
+  <!-- <node pkg="gazebo_ros" type="spawn_model" name="spawn_camera_stand"
+        args="-urdf -model camera_stand -param robot_description
+              -x 0 -y 0 -z 0 -Y 0"/> -->
+  <node pkg="gazebo_ros" type="spawn_model" name="spawn_camera_stand"
+        args="-urdf -model camera_stand -param robot_description
+              -x 0.18 -y 1.03 -z 0 -Y -0.349"/>
+
+  <!-- Publish TF for all URDF joints
+       (base_link -> stand_link -> rgbd_camera_link -> optical frames) -->
+  <node pkg="robot_state_publisher" type="robot_state_publisher"
+        name="robot_state_publisher"/>
+
+  <!-- Publish world -> base_link (from Gazebo link states) -->
   <node pkg="pallet_camera_gz" type="publish_camera_tf.py"
         name="camera_stand_tf_publisher" output="screen"/>
-
-  <!-- Publish rgbd_camera_link -> rgbd_camera_optical_frame (static REP-103 optical frame) -->
-  <node pkg="tf2_ros" type="static_transform_publisher"
-        name="rgbd_optical_tf"
-        args="0 0 0 -1.57079632679 0 -1.57079632679 rgbd_camera_link rgbd_camera_optical_frame"/>
 
   <!-- Open RViz with the package's preconfigured view -->
   <node if="$(arg use_rviz)" pkg="rviz" type="rviz" name="rviz"

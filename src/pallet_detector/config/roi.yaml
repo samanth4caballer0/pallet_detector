@@ -38,15 +38,28 @@ plane_max_iters: 100
 
 # Euclidean clustering
 cluster_tolerance: 0.05
-cluster_min_size: 300
+cluster_min_size: 500
 cluster_max_size: 200000
 
 # Expected pallet dimensions (meters)
-pallet_length: 1.2
-pallet_width:  0.8
-pallet_height: 0.15
+pallet_length: 1.20
+pallet_width:  0.80
+pallet_height: 0.145
 
 # Size-match tolerances (meters)
 tol_length: 0.10
 tol_width:  0.10
 tol_height: 0.06
+
+# Surface density gate (pts/m²) — pallet has gaps so lower surface density than solid box
+max_surface_density: 1100.0
+
+# Sub-cluster check — re-cluster inside candidate to verify internal structure (deck boards)
+subcluster_tolerance: 0.025   # tight tolerance to split at gaps between boards
+subcluster_min_size: 30      # min points per sub-cluster (one board)
+subcluster_min_count: 5      # min number of sub-clusters (a pallet has multiple boards)
+
+# Temporal tracking — smooth output and coast through brief occlusions
+track_gate_dist: 0.3   # max position jump (m) to accept as same pallet between frames
+track_max_miss: 5      # frames to coast on last known pose when detection drops
+track_alpha: 0.3       # smoothing factor (0 = fully trust previous, 1 = fully trust new detection)

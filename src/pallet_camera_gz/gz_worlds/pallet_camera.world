@@ -10,19 +10,91 @@
       <uri>model://ground_plane</uri>
     </include>
 
-    <!-- Camera stand at origin -->
-    <include>
-      <uri>model://camera_stand</uri>
-      <pose>0 0 0 0 0 0</pose>
-    </include>
+    <!-- Camera stand is now spawned from URDF via the launch file -->
 
-    <!-- Pallet 2m in front of the stand -->
+    <!-- Pallet 3m in front of the stand -->
     <include>
       <!-- <uri>model://pallet</uri> -->
       <uri>model://pallet_realistic</uri>
       <name>pallet</name>
       <pose>3 0 0.075 0 0 0</pose>
     </include>
+
+    <!-- ============ TEST OBSTACLES ============ -->
+
+    <!-- 1) Solid box with pallet-like dimensions: passes size gate,
+            should be rejected by alternate checks (solid = high density check, ) -->
+    <model name="solid_box_pallet_size">
+      <static>true</static>
+      <pose>3.0 1.0 0.075 0 0 0</pose>      <!-- offset to the other side, >0.05m gap so clustering keeps them separate -->
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>1.2 0.8 0.15</size></box></geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>      <!-- red --> 
+            <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>1.2 0.8 0.15</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- 2) Small crate: should be rejected by size gate (too small) -->
+    <model name="small_crate">
+      <static>true</static>
+      <pose>2.5 -1.0 0.25 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.5 0.5 0.5</size></box></geometry>
+          <material>
+            <ambient>0.2 0.2 0.8 1</ambient>    <!-- blue -->
+            <diffuse>0.2 0.2 0.8 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>0.5 0.5 0.5</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- 3) Tall column/pillar: wrong proportions, should be rejected by size gate -->
+    <model name="tall_column">
+      <static>true</static>
+      <pose>3.2 -0.8 0.5 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><cylinder><radius>0.15</radius><length>1.0</length></cylinder></geometry>
+          <material>
+            <ambient>0.5 0.5 0.5 1</ambient>    <!-- gray -->
+            <diffuse>0.5 0.5 0.5 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><cylinder><radius>0.15</radius><length>1.0</length></cylinder></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- 4) Flat wide board: similar length/width to pallet but much thinner,
+            tests if height tolerance rejects it -->
+    <!-- <model name="flat_board">
+      <static>true</static>
+      <pose>2.0 0.8 0.025 0 0 0.3</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>1.2 0.8 0.18</size></box></geometry>
+          <material>
+            <ambient>0.6 0.5 0.2 1</ambient>
+            <diffuse>0.6 0.5 0.2 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>1.2 0.8 0.18</size></box></geometry>
+        </collision>
+      </link>
+    </model> -->
 
   </world>
 </sdf>
