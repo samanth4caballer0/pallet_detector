@@ -2,7 +2,7 @@
 <sdf version="1.6">
   <model name="camera_stand">
     <static>true</static>
-
+    <!-- HERE WE TUNEd THE PARAMETERS OF THE RGBD CAMERA TO MATCH THE D435F REALSENSE -->
     <link name="stand_link">
       <!-- Lift the link so the 0.5m-tall box sits on the ground -->
       <pose>0 0 0.25 0 0 0</pose>

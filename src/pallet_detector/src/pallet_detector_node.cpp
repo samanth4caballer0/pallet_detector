@@ -17,10 +17,12 @@
 #include <pcl/search/kdtree.h>
 #include <pcl/segmentation/extract_clusters.h>
 
-#include <pcl/features/moment_of_inertia_estimation.h>
+#include <pcl/common/centroid.h>
 
 #include <Eigen/Dense>
 #include <algorithm>
+#include <cfloat>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -69,13 +71,13 @@ public:
     pnh_.param("tol_width", tol_W_, 0.10);
     pnh_.param("tol_height", tol_H_, 0.06);
 
-    pnh_.param("max_surface_density", max_surface_density_, 800.0); // pts/m² — surface density; loose gate, sub-cluster check does the real filtering
-
-    // Sub-cluster check: a real pallet has deck boards separated by gaps.
-    // Re-clustering inside a candidate with a tight tolerance should yield multiple sub-clusters (boards).
-    pnh_.param("subcluster_tolerance", subcluster_tolerance_, 0.03); // tighter than main clustering to split at gaps between boards
-    pnh_.param("subcluster_min_size", subcluster_min_size_, 30);     // min points per sub-cluster (one board)
-    pnh_.param("subcluster_min_count", subcluster_min_count_, 5);    // min number of sub-clusters expected (deck boards)
+    // Occupancy ratio check: project cluster onto the OBB top face (two largest dims)
+    // and measure what fraction of grid cells are occupied.
+    // A pallet with gaps between deck boards has a lower fill ratio (~0.4–0.75)
+    // than a solid box of the same size (~0.85–1.0).
+    pnh_.param("occupancy_cell_size", occupancy_cell_size_, 0.02); // grid cell size in meters
+    pnh_.param("min_fill_ratio", min_fill_ratio_, 0.3);            // below this = too sparse
+    pnh_.param("max_fill_ratio", max_fill_ratio_, 0.8);            // above this = too solid (no gaps)
 
     // Temporal tracking — smooth pose output and coast through brief occlusions
     pnh_.param("track_gate_dist", track_gate_dist_, 0.3); // max allowed jump (m) between frames to accept as same pallet
@@ -204,41 +206,49 @@ private: // MAIN CALLBACK
       if (std::abs(d[0] - pd[0]) > tol_H_)
         continue; // smallest ~ height
 
-      // Surface density check: pts / surface_area (m²). A pallet has gaps in the top face
-      // so its surface density is lower than a solid box of the same OBB dimensions.
-      double surface_area = 2.0 * (static_cast<double>(d[0]) * d[1] + d[1] * d[2] + d[0] * d[2]);
-      if (surface_area > 0.0)
+      // Occupancy ratio check: project points onto OBB top face, measure fill ratio.
+      // A pallet has gaps between deck boards → lower fill ratio than a solid box.
       {
-        double surf_density = static_cast<double>(cluster->size()) / surface_area;
-        ROS_INFO_STREAM("Cluster: pts=" << cluster->size()
-                                        << " dims=(" << d[0] << ", " << d[1] << ", " << d[2] << ")"
-                                        << " surf_area=" << surface_area
-                                        << " surf_density=" << surf_density
-                                        << " threshold=" << max_surface_density_);
-        if (surf_density > max_surface_density_)
-          continue; // too dense surface — likely a solid object, not a pallet
-      }
+        // Find the thin axis (smallest dimension = pallet height)
+        int thin_axis = 0;
+        if (dims.y() < dims.x() && dims.y() < dims.z()) thin_axis = 1;
+        else if (dims.z() < dims.x() && dims.z() < dims.y()) thin_axis = 2;
 
-      // Sub-cluster check: re-cluster inside this candidate with a tighter tolerance.
-      // A real pallet's deck boards + gaps should split into multiple sub-clusters.
-      // A solid box stays as one sub-cluster.
-      {
-        pcl::search::KdTree<PointT>::Ptr sub_tree(new pcl::search::KdTree<PointT>);
-        sub_tree->setInputCloud(cluster);
-        pcl::EuclideanClusterExtraction<PointT> sub_ec;
-        sub_ec.setClusterTolerance(subcluster_tolerance_);
-        sub_ec.setMinClusterSize(subcluster_min_size_);
-        sub_ec.setMaxClusterSize(static_cast<int>(cluster->size()));
-        sub_ec.setSearchMethod(sub_tree);
-        sub_ec.setInputCloud(cluster);
-        std::vector<pcl::PointIndices> sub_clusters;
-        sub_ec.extract(sub_clusters);
+        // The other two axes form the top face
+        int axis_a = (thin_axis == 0) ? 1 : 0;
+        int axis_b = (thin_axis == 2) ? 1 : 2;
 
-        ROS_INFO_STREAM("Sub-cluster check: " << sub_clusters.size()
-                                              << " sub-clusters (need >=" << subcluster_min_count_ << ")"
-                                              << " centroid=(" << obb_pos.x() << ", " << obb_pos.y() << ", " << obb_pos.z() << ")");
-        if (static_cast<int>(sub_clusters.size()) < subcluster_min_count_)
-          continue; // too few sub-clusters — solid object, not a pallet with deck boards
+        double extent_a = std::abs(obb_max[axis_a] - obb_min[axis_a]);
+        double extent_b = std::abs(obb_max[axis_b] - obb_min[axis_b]);
+
+        int grid_a = std::max(1, static_cast<int>(std::ceil(extent_a / occupancy_cell_size_)));
+        int grid_b = std::max(1, static_cast<int>(std::ceil(extent_b / occupancy_cell_size_)));
+
+        std::vector<bool> grid(grid_a * grid_b, false);
+
+        for (const auto &pt : *cluster)
+        {
+          Eigen::Vector3f p(pt.x, pt.y, pt.z);
+          Eigen::Vector3f local = obb_rot.transpose() * (p - obb_pos);
+
+          int ia = static_cast<int>((static_cast<double>(local[axis_a]) - obb_min[axis_a]) / occupancy_cell_size_);
+          int ib = static_cast<int>((static_cast<double>(local[axis_b]) - obb_min[axis_b]) / occupancy_cell_size_);
+
+          if (ia >= 0 && ia < grid_a && ib >= 0 && ib < grid_b)
+            grid[ia * grid_b + ib] = true;
+        }
+
+        int occupied = std::count(grid.begin(), grid.end(), true);
+        double fill_ratio = static_cast<double>(occupied) / static_cast<double>(grid_a * grid_b);
+
+        ROS_INFO_STREAM("Cluster " << cluster_id << ": pts=" << cluster->size()
+                                   << " dims=(" << d[0] << ", " << d[1] << ", " << d[2] << ")"
+                                   << " fill_ratio=" << fill_ratio
+                                   << " range=[" << min_fill_ratio_ << ", " << max_fill_ratio_ << "]"
+                                   << " centroid=(" << obb_pos.x() << ", " << obb_pos.y() << ", " << obb_pos.z() << ")");
+
+        if (fill_ratio < min_fill_ratio_ || fill_ratio > max_fill_ratio_)
+          continue; // too sparse or too solid — not a pallet with deck board gaps
       }
 
       // Score: sum absolute errors
@@ -400,30 +410,148 @@ private: // MAIN CALLBACK
     ec.extract(clusters);
   }
 
-  // job of this function: take input cluster (point cloud), compute oriented bounding box (OBB) using PCL's moment of inertia estimation, return OBB parameters (position, rotation, min/max corners)
+  // COMPUTATION OF OBB (ORIENTED BOUNDING BOX) USING PCA + MINIMUM-AREA BOUNDING RECTANGLE
+  // PCA finds the thin axis (pallet height) reliably regardless of viewing angle.
+  // For the in-plane orientation (length/width), we project points onto the top face,
+  // compute the 2D convex hull, and find the minimum-area bounding rectangle.
+  // This is immune to point density bias from perspective viewing angles.
   bool computeOBB(const CloudT::Ptr &cluster,
                   Eigen::Vector3f &obb_pos,
                   Eigen::Matrix3f &obb_rot,
                   Eigen::Vector3f &obb_min,
                   Eigen::Vector3f &obb_max)
   {
-    if (cluster->size() < 50) // too few points to compute reliable OBB
+    if (cluster->size() < 50)
       return false;
 
-    pcl::MomentOfInertiaEstimation<PointT> moi; // PCL class for computing oriented bounding box (OBB) using moment of inertia estimation
-    moi.setInputCloud(cluster);                 // set input cloud for OBB computation (the cluster point cloud)
-    moi.compute();
-    // check if MoI uses PCA to compute OBB (if not, maybe subsititute it?)
+    // --- Step 1: PCA to find the thin axis (smallest eigenvalue = pallet height) ---
+    Eigen::Vector4f centroid4;
+    pcl::compute3DCentroid(*cluster, centroid4);
+    Eigen::Vector3f centroid = centroid4.head<3>();
 
-    // first allocate variables to hold OBB outputs, then call getOBB() to compute OBB and fill those variables
-    pcl::PointXYZ min_pt, max_pt, pos_pt;    // outputs of OBB computation: min_pt and max_pt are the corners of the bounding box, pos_pt is the center position of the box, rot is the rotation matrix representing the orientation of the box
-    Eigen::Matrix3f rot;                     // convert rotation from PCL format to Eigen
-    moi.getOBB(min_pt, max_pt, pos_pt, rot); // PCL function to compute OBB and return parameters
+    Eigen::Matrix3f cov;
+    pcl::computeCovarianceMatrixNormalized(*cluster, centroid4, cov);
 
-    obb_pos = pos_pt.getVector3fMap();
-    obb_rot = rot;
-    obb_min = min_pt.getVector3fMap();
-    obb_max = max_pt.getVector3fMap();
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(cov);
+    Eigen::Matrix3f evecs = solver.eigenvectors(); // columns sorted ascending by eigenvalue
+
+    Eigen::Vector3f thin_axis = evecs.col(0); // smallest variance = height direction
+    Eigen::Vector3f u_axis    = evecs.col(1); // in-plane axis (PCA, will be refined)
+    Eigen::Vector3f v_axis    = evecs.col(2); // in-plane axis (PCA, will be refined)
+
+    // --- Step 2: Project points onto the top-face plane (u, v) and record thin-axis coords ---
+    std::vector<Eigen::Vector2f> pts2d(cluster->size());
+    std::vector<float> thin_vals(cluster->size());
+
+    for (size_t i = 0; i < cluster->size(); ++i)
+    {
+      Eigen::Vector3f p((*cluster)[i].x, (*cluster)[i].y, (*cluster)[i].z);
+      Eigen::Vector3f d = p - centroid;
+      pts2d[i]    = Eigen::Vector2f(d.dot(u_axis), d.dot(v_axis));
+      thin_vals[i] = d.dot(thin_axis);
+    }
+
+    // --- Step 3: 2D Convex Hull (Andrew's monotone chain) ---
+    std::vector<size_t> order(pts2d.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+      if (pts2d[a].x() != pts2d[b].x()) return pts2d[a].x() < pts2d[b].x();
+      return pts2d[a].y() < pts2d[b].y();
+    });
+
+    auto cross2d = [](const Eigen::Vector2f &O, const Eigen::Vector2f &A, const Eigen::Vector2f &B) -> float {
+      return (A.x() - O.x()) * (B.y() - O.y()) - (A.y() - O.y()) * (B.x() - O.x());
+    };
+
+    std::vector<Eigen::Vector2f> hull;
+    // Lower hull
+    for (size_t i : order) {
+      while (hull.size() >= 2 && cross2d(hull[hull.size() - 2], hull[hull.size() - 1], pts2d[i]) <= 0.0f)
+        hull.pop_back();
+      hull.push_back(pts2d[i]);
+    }
+    // Upper hull
+    size_t lower_sz = hull.size() + 1;
+    for (auto it = order.rbegin(); it != order.rend(); ++it) {
+      while (hull.size() >= lower_sz && cross2d(hull[hull.size() - 2], hull[hull.size() - 1], pts2d[*it]) <= 0.0f)
+        hull.pop_back();
+      hull.push_back(pts2d[*it]);
+    }
+    hull.pop_back(); // remove duplicate of first point
+
+    if (hull.size() < 3)
+      return false;
+
+    // --- Step 4: Minimum-area bounding rectangle via rotating calipers ---
+    float best_area  = FLT_MAX;
+    float best_angle = 0.0f;
+    Eigen::Vector2f best_rmin, best_rmax;
+
+    for (size_t i = 0; i < hull.size(); ++i)
+    {
+      size_t j = (i + 1) % hull.size();
+      float angle = std::atan2(hull[j].y() - hull[i].y(), hull[j].x() - hull[i].x());
+      float ca = std::cos(angle), sa = std::sin(angle);
+
+      Eigen::Vector2f mn( FLT_MAX,  FLT_MAX);
+      Eigen::Vector2f mx(-FLT_MAX, -FLT_MAX);
+
+      for (const auto &p : hull)
+      {
+        // Rotate by -angle to align this edge with the X axis
+        float rx =  ca * p.x() + sa * p.y();
+        float ry = -sa * p.x() + ca * p.y();
+        mn.x() = std::min(mn.x(), rx);  mn.y() = std::min(mn.y(), ry);
+        mx.x() = std::max(mx.x(), rx);  mx.y() = std::max(mx.y(), ry);
+      }
+
+      float area = (mx.x() - mn.x()) * (mx.y() - mn.y());
+      if (area < best_area)
+      {
+        best_area  = area;
+        best_angle = angle;
+        best_rmin  = mn;
+        best_rmax  = mx;
+      }
+    }
+
+    // --- Step 5: Build OBB from the minimum-area rectangle ---
+    float ca = std::cos(best_angle), sa = std::sin(best_angle);
+
+    // Refined in-plane axes aligned with the minimum-area rectangle (world frame)
+    Eigen::Vector3f new_u =  ca * u_axis + sa * v_axis;
+    Eigen::Vector3f new_v = -sa * u_axis + ca * v_axis;
+
+    // Ensure right-handed coordinate system
+    if (thin_axis.dot(new_u.cross(new_v)) < 0)
+      thin_axis = -thin_axis;
+
+    // Rectangle center in rotated 2D frame → transform back to u,v frame
+    Eigen::Vector2f rc = 0.5f * (best_rmin + best_rmax);
+    float cx_uv = ca * rc.x() - sa * rc.y(); // inverse of the -angle rotation
+    float cy_uv = sa * rc.x() + ca * rc.y();
+
+    // Thin-axis extents
+    float thin_min = *std::min_element(thin_vals.begin(), thin_vals.end());
+    float thin_max = *std::max_element(thin_vals.begin(), thin_vals.end());
+    float thin_ctr = 0.5f * (thin_min + thin_max);
+
+    // OBB center in world coordinates
+    obb_pos = centroid + cx_uv * u_axis + cy_uv * v_axis + thin_ctr * thin_axis;
+
+    // OBB rotation: columns are the three OBB axes
+    obb_rot.col(0) = new_u;
+    obb_rot.col(1) = new_v;
+    obb_rot.col(2) = thin_axis;
+
+    // OBB half-extents in local frame (centered at origin)
+    float half_u = 0.5f * (best_rmax.x() - best_rmin.x());
+    float half_v = 0.5f * (best_rmax.y() - best_rmin.y());
+    float half_t = 0.5f * (thin_max - thin_min);
+
+    obb_min = Eigen::Vector3f(-half_u, -half_v, -half_t);
+    obb_max = Eigen::Vector3f( half_u,  half_v,  half_t);
+
     return true;
   }
 
@@ -488,10 +616,9 @@ private:
 
   double pallet_L_, pallet_W_, pallet_H_; // expected dimensions of a pallet (length, width, height)
   double tol_L_, tol_W_, tol_H_;          // tolerances for how much detected cluster dimensions can deviate from expected pallet dimensions to still be considered a match
-  double max_surface_density_;            // max surface density (pts/m²) — reject clusters with denser surface than a pallet
-  double subcluster_tolerance_;           // tight clustering tolerance to split deck boards at gaps
-  int subcluster_min_size_;               // min points per sub-cluster (one board)
-  int subcluster_min_count_;              // min number of sub-clusters expected (deck boards)
+  double occupancy_cell_size_;             // grid cell size for occupancy ratio check
+  double min_fill_ratio_;                 // min fill ratio (below = too sparse)
+  double max_fill_ratio_;                 // max fill ratio (above = too solid, no gaps)
 
   // Temporal tracking state
   double track_gate_dist_;                  // max allowed position jump (m) to accept as same pallet

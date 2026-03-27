@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <robot name="camera_stand">
-
+  <!-- HERE WE TUNE THE PARAMETERS OF THE RGBD CAMERA TO MATCH THE D435F REALSENSE -->
   <!-- Mark as static in Gazebo (no physics needed, this changes later when simulating robot) -->
   <gazebo>
     <static>true</static>
