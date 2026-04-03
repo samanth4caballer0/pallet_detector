@@ -20,6 +20,26 @@
       <pose>3 0 0.075 0 0 0</pose>
     </include>
 
+    <!-- 0) Large carton box sitting centered on the pallet
+            Pallet is 1.2x0.8m; box has 0.12m gap on all sides → 0.96x0.56x0.50m
+            Pallet top at z=0.15, box center at z=0.15+0.25=0.40 -->
+    <model name="carton_box_on_pallet">
+      <static>true</static>
+      <pose>3.0 0 0.40 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.96 0.56 0.50</size></box></geometry>
+          <material>
+            <ambient>0.72 0.53 0.26 1</ambient>
+            <diffuse>0.72 0.53 0.26 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>0.96 0.56 0.50</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
     <!-- ============ TEST OBSTACLES ============ -->
 
     <!-- 1) Solid box with pallet-like dimensions: passes size gate,

@@ -1,38 +1,28 @@
 # Pallet Detector Parameters
 # Parameter names must match pnh_.param("name", ...) calls in pallet_detector_node.cpp
 #
-# Axis convention (camera frame):
-#   x = left/right (side)  → x_min / x_max
-#   y = up/down (vertical) → y_min / y_max
-#   z = forward (depth)    → z_min / z_max
-#
-# ROI v1 (safe / wide) — uncomment v1.5 block and comment v1 to tighten after confirmation
+# Axis convention (camera optical frame):
+#   x = left/right (side)
+#   y = up/down (vertical)
+#   z = forward (depth)
 
-# ----- ROI v1 (safe) -----
+# ----- ROI -----
 x_min: -1.5
-x_max:  1.5
-y_min:  0.2
-y_max:  1.0
-z_min:  1.0
-z_max:  3.5
-
-# ----- ROI v1.5 (tighter, after pallet detection confirmed) -----
-# x_min: -1.0
-# x_max:  1.0
-# y_min: -1.0
-# y_max:  1.0
-# z_min:  1.2
-# z_max:  3.0
+x_max: 1.5
+y_min: 0.2
+y_max: 1.0
+z_min: 1.0
+z_max: 3.5
 
 # Voxel downsampling
 voxel_leaf: 0.02
 
-# Statistical Outlier Removal (SOR) — disabled by default
+# Statistical Outlier Removal (SOR)
 use_sor: false
 sor_mean_k: 30
 sor_stddev: 1.0
 
-# Plane removal (floor/dominant flat surface)
+# Plane removal (dominant plane, e.g. floor)
 plane_dist_thresh: 0.02
 plane_max_iters: 100
 
@@ -43,23 +33,46 @@ cluster_max_size: 200000
 
 # Expected pallet dimensions (meters)
 pallet_length: 1.20
-pallet_width:  0.80
+pallet_width: 0.80
 pallet_height: 0.145
 
-# Size-match tolerances (meters)
+# Size tolerances (meters)
 tol_length: 0.10
-tol_width:  0.10
+tol_width: 0.10
 tol_height: 0.06
 
-# Surface density gate (pts/m²) — pallet has gaps so lower surface density than solid box
-max_surface_density: 1100.0
+# Top-face occupancy scoring (length x width)
+occupancy_cell_size: 0.02
+min_fill_ratio: 0.30
+max_fill_ratio: 0.80
+enable_top_fill_gate: false
 
-# Sub-cluster check — re-cluster inside candidate to verify internal structure (deck boards)
-subcluster_tolerance: 0.025   # tight tolerance to split at gaps between boards
-subcluster_min_size: 30      # min points per sub-cluster (one board)
-subcluster_min_count: 5      # min number of sub-clusters (a pallet has multiple boards)
+# Front/side structure scoring (template-like fork-pocket cues)
+front_cell_size: 0.02
+front_fill_min: 0.12
+front_fill_max: 0.85
+front_lower_height_ratio: 0.55
+front_void_column_fill_max: 0.25
+front_min_void_columns: 1
+front_upper_fill_min: 0.25
 
-# Temporal tracking — smooth output and coast through brief occlusions
-track_gate_dist: 0.3   # max position jump (m) to accept as same pallet between frames
-track_max_miss: 5      # frames to coast on last known pose when detection drops
-track_alpha: 0.3       # smoothing factor (0 = fully trust previous, 1 = fully trust new detection)
+# Height-profile (bimodality) scoring
+height_bins: 12
+height_valley_ratio_max: 0.45
+
+# Weighted fusion score
+w_dim: 0.15
+w_top: 0.25
+w_front: 0.45
+w_height: 0.15
+min_front_score: 0.35
+min_total_score: 0.60
+
+# Temporal tracking
+track_gate_dist: 0.3
+track_max_miss: 5
+track_alpha: 0.3
+track_conf_alpha: 0.5
+track_acquire_conf: 0.60
+track_keep_conf: 0.42
+track_acquire_hits: 2
