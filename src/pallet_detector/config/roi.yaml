@@ -31,48 +31,20 @@ cluster_tolerance: 0.05
 cluster_min_size: 500
 cluster_max_size: 200000
 
-# Expected pallet dimensions (meters)
-pallet_length: 1.20
+# Expected pallet dimensions (meters) — width and height used for post-OBB gate
 pallet_width: 0.80
 pallet_height: 0.145
-
-# Size tolerances (meters)
-tol_length: 0.10
 tol_width: 0.10
-tol_height: 0.06
+tol_height: 0.08
 
-# Top-face occupancy scoring (length x width)
-occupancy_cell_size: 0.02
-min_fill_ratio: 0.30
-max_fill_ratio: 0.80
-enable_top_fill_gate: false
+# Front-face template matching (Xiao et al. 2017 style)
+tpl_cell_size: 0.02         # 2D grid resolution (m/cell)
+chi_threshold: 0.40         # minimum chi score to accept a cluster as a pallet
 
-# Front/side structure scoring (template-like fork-pocket cues)
-front_cell_size: 0.02
-front_fill_min: 0.12
-front_fill_max: 0.85
-front_lower_height_ratio: 0.55
-front_void_column_fill_max: 0.25
-front_min_void_columns: 1
-front_upper_fill_min: 0.25
+# EUR/EPAL pallet end-face geometry — solid block definitions matching model.sdf
+# Template is built from feature blocks (paper approach): each block = solid rectangle on face.
+# Stringer layout (0-based, left to right): x=0..0.10, x=0.35..0.45, x=0.70..0.80
+tpl_stringer_width: 0.10    # width of each of the 3 stringers (m) — from SDF collision size y=0.10
+tpl_top_deck_height: 0.04   # top deck height (m) — from SDF collision size z=0.04
+tpl_stringer_height: 0.06   # stringer zone height visible above floor (m) — physical is 0.10 but bottom rows near floor
 
-# Height-profile (bimodality) scoring
-height_bins: 12
-height_valley_ratio_max: 0.45
-
-# Weighted fusion score
-w_dim: 0.15
-w_top: 0.25
-w_front: 0.45
-w_height: 0.15
-min_front_score: 0.35
-min_total_score: 0.60
-
-# Temporal tracking
-track_gate_dist: 0.3
-track_max_miss: 5
-track_alpha: 0.3
-track_conf_alpha: 0.5
-track_acquire_conf: 0.60
-track_keep_conf: 0.42
-track_acquire_hits: 2
