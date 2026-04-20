@@ -17,11 +17,6 @@ z_max: 3.5
 # Voxel downsampling
 voxel_leaf: 0.02
 
-# Statistical Outlier Removal (SOR)
-use_sor: false
-sor_mean_k: 30
-sor_stddev: 1.0
-
 # Plane removal (dominant plane, e.g. floor)
 plane_dist_thresh: 0.02
 plane_max_iters: 100

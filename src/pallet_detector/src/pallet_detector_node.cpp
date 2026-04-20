@@ -3,13 +3,15 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <visualization_msgs/Marker.h>
 
+#include <tf2_ros/transform_listener.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl_ros/point_cloud.h>
 
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/crop_box.h>
-#include <pcl/filters/statistical_outlier_removal.h>
 
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/filters/extract_indices.h>
@@ -35,7 +37,7 @@ public:
   using CloudT = pcl::PointCloud<PointT>;
 
   PalletDetector(ros::NodeHandle &nh, ros::NodeHandle &pnh)
-      : nh_(nh), pnh_(pnh)
+      : nh_(nh), pnh_(pnh), tf_listener_(tf_buffer_)
   {
     // Parameters
     pnh_.param<std::string>("cloud_topic", cloud_topic_, "/demo/rgbd_camera/depth/points");
@@ -51,10 +53,6 @@ public:
 
     // Filtering
     pnh_.param("voxel_leaf", voxel_leaf_, 0.02);
-    pnh_.param("use_sor", use_sor_, false);
-    pnh_.param("sor_mean_k", sor_mean_k_, 30);
-    pnh_.param("sor_stddev", sor_stddev_, 1.0);
-
     // Plane removal
     pnh_.param("plane_dist_thresh", plane_dist_thresh_, 0.02);
     pnh_.param("plane_max_iters", plane_max_iters_, 100);
@@ -102,6 +100,23 @@ private: // MAIN CALLBACK
 
     const std::string frame = output_frame_.empty() ? msg->header.frame_id : output_frame_;
 
+    // Log camera pose in world frame every frame
+    try
+    {
+      geometry_msgs::TransformStamped cam_tf =
+          tf_buffer_.lookupTransform("world", frame, ros::Time(0));
+      const auto &t = cam_tf.transform.translation;
+      const auto &r = cam_tf.transform.rotation;
+      const double cam_yaw = std::atan2(2.0 * (r.w * r.z + r.x * r.y),
+                                        1.0 - 2.0 * (r.y * r.y + r.z * r.z)) * 180.0 / M_PI;
+      ROS_INFO_STREAM("CAMERA WORLD: pos=(" << t.x << ", " << t.y << ", " << t.z << ")"
+                                            << " yaw=" << cam_yaw << " deg");
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      ROS_WARN_STREAM_THROTTLE(2.0, "Camera TF lookup failed: " << ex.what());
+    }
+
     // 1) ROI crop box
     CloudT::Ptr roi = cropBoxROI(cloud);
 
@@ -122,24 +137,9 @@ private: // MAIN CALLBACK
     if (ds->size() < 100)
       return;
 
-    // 3) Optional statistical outlier removal
-    CloudT::Ptr filtered(new CloudT);
-    if (use_sor_)
-    {
-      pcl::StatisticalOutlierRemoval<PointT> sor;
-      sor.setInputCloud(ds);
-      sor.setMeanK(sor_mean_k_);
-      sor.setStddevMulThresh(sor_stddev_);
-      sor.filter(*filtered);
-    }
-    else
-    {
-      filtered = ds;
-    }
-
-    // 4) Plane segmentation (remove floor / dominant horizontal surface)
+    // 3) Plane segmentation (remove floor / dominant horizontal surface)
     CloudT::Ptr no_plane(new CloudT);
-    removeDominantPlane(filtered, no_plane);
+    removeDominantPlane(ds, no_plane);
     if (no_plane->size() < 200)
       return;
 
@@ -155,11 +155,11 @@ private: // MAIN CALLBACK
     std::vector<pcl::PointIndices> cluster_indices;
     euclideanClusters(no_plane, cluster_indices);
 
-    ROS_INFO_STREAM_THROTTLE(1.0, "cloud=" << cloud->size()
-                                           << " roi=" << roi->size()
-                                           << " ds=" << ds->size()
-                                           << " no_plane=" << no_plane->size()
-                                           << " clusters=" << cluster_indices.size());
+    ROS_WARN_STREAM("cloud=" << cloud->size()
+                             << " roi=" << roi->size()
+                             << " ds=" << ds->size()
+                             << " no_plane=" << no_plane->size()
+                             << " clusters=" << cluster_indices.size());
 
     // 6) For each cluster: front-face template match → back-project → OBB → 2-dim gate.
     bool candidate_found = false;
@@ -171,10 +171,9 @@ private: // MAIN CALLBACK
     // Camera optical frame: Y=down, so floor = large Y, pallet top = floor_y - pallet_H.
     const bool have_floor = !std::isnan(floor_y_);
     const float crop_y_hi = have_floor ? floor_y_ + static_cast<float>(tol_H_) : FLT_MAX;
-    const float crop_y_lo = have_floor ? floor_y_ - static_cast<float>(pallet_H_)
-                                                   - static_cast<float>(tol_H_) : -FLT_MAX;
-    ROS_INFO_STREAM("floor_y=" << floor_y_
-                    << " crop_y=[" << crop_y_lo << ", " << crop_y_hi << "]");
+    const float crop_y_lo = have_floor ? floor_y_ - static_cast<float>(pallet_H_) - static_cast<float>(tol_H_) : -FLT_MAX;
+    ROS_WARN_STREAM("floor_y=" << floor_y_
+                               << " crop_y=[" << crop_y_lo << ", " << crop_y_hi << "]");
 
     int cid = 0;
     for (const auto &idx : cluster_indices)
@@ -192,13 +191,14 @@ private: // MAIN CALLBACK
         if (pt.y >= crop_y_lo && pt.y <= crop_y_hi)
           face_pts->push_back(pt);
 
-      ROS_INFO_STREAM("  C" << cid << " cluster=" << cluster->size()
-                      << " height_crop=" << face_pts->size());
+      ROS_WARN_STREAM("  C" << cid << " cluster=" << cluster->size()
+                            << " height_crop=" << face_pts->size());
 
       if (static_cast<int>(face_pts->size()) < 50)
       {
         ROS_WARN_STREAM("  C" << cid << " REJECT: too few points after height crop");
-        ++cid; continue;
+        ++cid;
+        continue;
       }
 
       // 6b) Project height-cropped cloud onto 2D grid: camera X = width cols, camera Y = height rows.
@@ -214,21 +214,21 @@ private: // MAIN CALLBACK
 
       // Print observed grid as ASCII art for template comparison/tuning
       {
-        ROS_INFO_STREAM("  C" << cid << " OBSERVED GRID (" << gcols << "x" << grows << "):");
+        ROS_WARN_STREAM("  C" << cid << " OBSERVED GRID (" << gcols << "x" << grows << "):");
         for (int r = 0; r < grows; ++r)
         {
           std::string row_str;
           for (int c = 0; c < gcols; ++c)
             row_str += grid[r * gcols + c] ? '#' : '.';
-          ROS_INFO_STREAM("    row " << r << ": " << row_str);
+          ROS_WARN_STREAM("    row " << r << ": " << row_str);
         }
-        ROS_INFO_STREAM("  C" << cid << " TEMPLATE (" << template_cols_ << "x" << template_rows_ << "):");
+        ROS_WARN_STREAM("  C" << cid << " TEMPLATE (" << template_cols_ << "x" << template_rows_ << "):");
         for (int r = 0; r < template_rows_; ++r)
         {
           std::string row_str;
           for (int c = 0; c < template_cols_; ++c)
             row_str += template_grid_[r * template_cols_ + c] ? '#' : '.';
-          ROS_INFO_STREAM("    row " << r << ": " << row_str);
+          ROS_WARN_STREAM("    row " << r << ": " << row_str);
         }
       }
 
@@ -237,19 +237,21 @@ private: // MAIN CALLBACK
       if (gcols < template_cols_ || grows < template_rows_)
       {
         ROS_WARN_STREAM("  C" << cid << " REJECT: grid too small for template");
-        ++cid; continue;
+        ++cid;
+        continue;
       }
 
       // 6c) Slide template → best chi score and matched window position
       int best_co = 0, best_ro = 0;
       const double chi = slideTemplate(grid, gcols, grows, best_co, best_ro);
       ROS_INFO_STREAM("  C" << cid << " chi=" << chi << " threshold=" << chi_threshold_
-                      << "  best_co=" << best_co << " best_ro=" << best_ro
-                      << "  u_min=" << u_min << " v_min=" << v_min);
+                            << "  best_co=" << best_co << " best_ro=" << best_ro
+                            << "  u_min=" << u_min << " v_min=" << v_min);
       if (chi < chi_threshold_)
       {
         ROS_WARN_STREAM("  C" << cid << " REJECT: chi too low");
-        ++cid; continue;
+        ++cid;
+        continue;
       }
 
       // 6d) Width gate on matched window.
@@ -260,7 +262,7 @@ private: // MAIN CALLBACK
       const float match_x_hi = u_min + static_cast<float>(best_co + template_cols_) * cs;
       const float match_y_lo = v_min + static_cast<float>(best_ro) * cs;
       const float match_y_hi = v_min + static_cast<float>(best_ro + template_rows_) * cs;
-      const float matched_W  = match_x_hi - match_x_lo;
+      const float matched_W = match_x_hi - match_x_lo;
 
       CloudT::Ptr matched_pts(new CloudT);
       matched_pts->reserve(face_pts->size());
@@ -270,28 +272,43 @@ private: // MAIN CALLBACK
           matched_pts->push_back(pt);
 
       ROS_INFO_STREAM("  C" << cid << " matched_W=" << matched_W
-                      << " matched_pts=" << matched_pts->size());
+                            << " matched_pts=" << matched_pts->size());
       if (std::abs(matched_W - static_cast<float>(pallet_W_)) > static_cast<float>(tol_W_))
       {
         ROS_WARN_STREAM("  C" << cid << " REJECT: width gate matched_W=" << matched_W);
-        ++cid; continue;
+        ++cid;
+        continue;
       }
       if (static_cast<int>(matched_pts->size()) < 30)
       {
         ROS_WARN_STREAM("  C" << cid << " REJECT: too few matched points");
-        ++cid; continue;
+        ++cid;
+        continue;
       }
 
       // 6e) Pose: RANSAC front-face plane → normal (yaw) + inlier centroid (depth).
-      //     Plane constrained to face the camera (normal ≈ camera Z axis, eps ≈ 25°).
-      //     X: geometric window midpoint (density-independent).
+      //     RANSAC runs only on the stringer zone (bottom portion of height window, below
+      //     the top deck) so that a box sitting on the pallet cannot contribute points.
       //     Fallback to PCA yaw + centroid Z if RANSAC yields too few inliers.
       Eigen::Vector4f c4;
       pcl::compute3DCentroid(*matched_pts, c4);
 
+      // Stringer zone: lower tpl_stringer_height_ of the matched window (Y=down in camera)
+      const float stringer_y_lo = match_y_lo + static_cast<float>(tpl_top_deck_height_);
+      const float stringer_y_hi = match_y_hi;  // bottom of window = stringers
+
+      CloudT::Ptr stringer_pts(new CloudT);
+      stringer_pts->reserve(matched_pts->size());
+      for (const auto &pt : *matched_pts)
+        if (pt.y >= stringer_y_lo && pt.y <= stringer_y_hi)
+          stringer_pts->push_back(pt);
+
+      ROS_INFO_STREAM("  Stringer zone pts=" << stringer_pts->size()
+                      << " y=[" << stringer_y_lo << "," << stringer_y_hi << "]");
+
       const float face_pos_y = 0.5f * (match_y_lo + match_y_hi);
-      float face_pos_x = c4.x();  // fallback
-      float face_pos_z = c4.z();  // fallback
+      float face_pos_x = c4.x(); // fallback
+      float face_pos_z = c4.z(); // fallback
       float yaw = 0.f;
 
       {
@@ -300,10 +317,11 @@ private: // MAIN CALLBACK
         seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
         seg.setMethodType(pcl::SAC_RANSAC);
         seg.setAxis(Eigen::Vector3f(0.f, 0.f, 1.f));
-        seg.setEpsAngle(0.44f);   // ~25 degrees
+        // seg.setEpsAngle(0.44f);   // ~25 degrees
+        seg.setEpsAngle(0.785f); // ~45 degrees — rejects near-horizontal planes (~67°), accepts front face up to 45° camera yaw
         seg.setDistanceThreshold(0.02f);
         seg.setMaxIterations(100);
-        seg.setInputCloud(matched_pts);
+        seg.setInputCloud(stringer_pts);
 
         pcl::ModelCoefficients::Ptr coeff(new pcl::ModelCoefficients);
         pcl::PointIndices::Ptr plane_inliers(new pcl::PointIndices);
@@ -313,14 +331,24 @@ private: // MAIN CALLBACK
             coeff->values.size() == 4)
         {
           Eigen::Vector3f n(coeff->values[0], coeff->values[1], coeff->values[2]);
-          if (n.z() > 0.f) n = -n;  // ensure normal points toward camera (−Z)
+          if (n.z() > 0.f)
+            n = -n; // ensure normal points toward camera (−Z)
+
+          // Reject non-vertical planes (box top, floor): front face must have |ny| < sin(30°)
+          if (std::abs(n.y()) > 0.5f)
+          {
+            ROS_WARN_STREAM("  Front-face RANSAC found non-vertical plane (ny=" << n.y()
+                                                                                << "), falling back to PCA+centroid");
+            goto ransac_fallback;
+          }
 
           // yaw: pal_z convention → face normal = (sin(yaw), 0, -cos(yaw)) → yaw = atan2(nx, -nz)
           yaw = std::atan2(n.x(), -n.z());
 
           // Temporary pal_x needed for ux projection (same convention as post-block computation)
           Eigen::Vector3f pal_x_tmp(std::cos(yaw), 0.f, std::sin(yaw));
-          if (pal_x_tmp.x() < 0.f) pal_x_tmp = -pal_x_tmp;
+          if (pal_x_tmp.x() < 0.f)
+            pal_x_tmp = -pal_x_tmp;
 
           // Z: inlier centroid (front-face points, side-face excluded by plane constraint)
           // X: ux-midpoint — project inliers onto pal_x (face-width direction), take geometric
@@ -329,8 +357,9 @@ private: // MAIN CALLBACK
           float x_sum = 0.f, z_sum = 0.f;
           float ux_min_i = FLT_MAX, ux_max_i = -FLT_MAX;
           const int n_inliers = static_cast<int>(plane_inliers->indices.size());
-          for (int idx : plane_inliers->indices) {
-            const auto &pt = (*matched_pts)[idx];
+          for (int idx : plane_inliers->indices)
+          {
+            const auto &pt = (*stringer_pts)[idx];
             x_sum += pt.x;
             z_sum += pt.z;
             const float ux = pt.x * pal_x_tmp.x() + pt.z * pal_x_tmp.z();
@@ -342,26 +371,29 @@ private: // MAIN CALLBACK
           face_pos_z = iz;
 
           // Shift centroid laterally to the ux midpoint
-          const float ix_ux    = ix * pal_x_tmp.x() + iz * pal_x_tmp.z();
+          const float ix_ux = ix * pal_x_tmp.x() + iz * pal_x_tmp.z();
           const float ux_mid_i = 0.5f * (ux_min_i + ux_max_i);
           face_pos_x = ix + (ux_mid_i - ix_ux) * pal_x_tmp.x();
 
           ROS_INFO_STREAM("  Front-face plane: " << n_inliers
-                          << " inliers n=(" << n.x() << "," << n.y() << "," << n.z()
-                          << ") yaw=" << yaw * 180.f / M_PI << "deg"
-                          << " face_x=" << face_pos_x << " (centroid_x=" << ix << ")"
-                          << " face_z=" << face_pos_z);
+                                                 << " inliers n=(" << n.x() << "," << n.y() << "," << n.z()
+                                                 << ") yaw=" << yaw * 180.f / M_PI << "deg"
+                                                 << " face_x=" << face_pos_x << " (centroid_x=" << ix << ")"
+                                                 << " face_z=" << face_pos_z);
         }
         else
         {
+        ransac_fallback:
           ROS_WARN_STREAM("  Front-face RANSAC failed (" << plane_inliers->indices.size()
-                          << " inliers), falling back to PCA+centroid");
+                                                         << " inliers), falling back to PCA+centroid");
           const float xm = c4.x(), zm = c4.z();
           float cxx = 0.f, cxz = 0.f, czz = 0.f;
           for (const auto &pt : *matched_pts)
           {
             const float dx = pt.x - xm, dz = pt.z - zm;
-            cxx += dx * dx; cxz += dx * dz; czz += dz * dz;
+            cxx += dx * dx;
+            cxz += dx * dz;
+            czz += dz * dz;
           }
           yaw = 0.5f * std::atan2(2.f * cxz, cxx - czz);
           // face_pos_x and face_pos_z remain as c4 centroid fallback
@@ -369,9 +401,11 @@ private: // MAIN CALLBACK
       }
 
       Eigen::Vector3f pal_x(std::cos(yaw), 0.f, std::sin(yaw));
-      if (pal_x.x() < 0.f) pal_x = -pal_x;
+      if (pal_x.x() < 0.f)
+        pal_x = -pal_x;
       Eigen::Vector3f pal_z(-pal_x.z(), 0.f, pal_x.x());
-      if (pal_z.z() > 0.f) pal_z = -pal_z;
+      if (pal_z.z() > 0.f)
+        pal_z = -pal_z;
       const Eigen::Vector3f pal_y = pal_z.cross(pal_x);
 
       Eigen::Matrix3f obb_rot;
@@ -384,10 +418,10 @@ private: // MAIN CALLBACK
 
       // Debug: full pose breakdown — compare against known pallet ground truth
       ROS_INFO_STREAM("  POSE cam_frame: x=" << face_pos_x
-                      << " (c4x=" << c4.x() << " win_mid=" << 0.5f*(match_x_lo+match_x_hi) << ")"
-                      << "  z=" << face_pos_z << " (c4z=" << c4.z() << ")"
-                      << "  y=" << face_pos_y
-                      << "  yaw=" << yaw * 180.f / M_PI << "deg");
+                                             << " (c4x=" << c4.x() << " win_mid=" << 0.5f * (match_x_lo + match_x_hi) << ")"
+                                             << "  z=" << face_pos_z << " (c4z=" << c4.z() << ")"
+                                             << "  y=" << face_pos_y
+                                             << "  yaw=" << yaw * 180.f / M_PI << "deg");
 
       ROS_INFO_STREAM_THROTTLE(1.0, "Cluster: chi=" << chi
                                                     << " dims=(" << dims.x() << ", " << dims.y() << ", " << dims.z() << ")"
@@ -423,17 +457,47 @@ private: // MAIN CALLBACK
       const double qy = best_pose.pose.orientation.y;
       const double qz = best_pose.pose.orientation.z;
       const double qw = best_pose.pose.orientation.w;
-      const double yaw_deg = std::atan2(2.0 * (qw * qz + qx * qy),
+      // Extract yaw as angle of pal_x in camera XZ plane.
+      // Standard atan2(qw*qz) formula extracts world-Z rotation and gives 0 here because
+      // the rotation is a 180° flip about a tilted axis (pal_y points down).
+      // Instead: R[2][0]=2*(qx*qz-qy*qw) = pal_x.z, R[0][0]=1-2*(qy²+qz²) = pal_x.x
+      const double yaw_deg = std::atan2(2.0 * (qx * qz - qy * qw),
                                         1.0 - 2.0 * (qy * qy + qz * qz)) *
                              180.0 / M_PI;
 
-      ROS_INFO_STREAM_THROTTLE(1.0, "PALLET DETECTED: chi=" << best_chi
+      ROS_INFO_STREAM("PALLET DETECTED: chi=" << best_chi
                                                             << " pos=(" << best_pose.pose.position.x
                                                             << ", " << best_pose.pose.position.y
                                                             << ", " << best_pose.pose.position.z << ")"
                                                             << " yaw=" << yaw_deg << " deg");
       pose_pub_.publish(best_pose);
       marker_pub_.publish(best_marker);
+
+      // Log world-frame pose for ground-truth comparison
+      try
+      {
+        geometry_msgs::PoseStamped world_pose;
+        tf_buffer_.transform(best_pose, world_pose, "world", ros::Duration(0.1));
+        const double wx = world_pose.pose.position.x;
+        const double wy = world_pose.pose.position.y;
+        const double wz = world_pose.pose.position.z;
+        const double wqx = world_pose.pose.orientation.x;
+        const double wqy = world_pose.pose.orientation.y;
+        const double wqz = world_pose.pose.orientation.z;
+        const double wqw = world_pose.pose.orientation.w;
+        // Approach yaw: angle of -pal_z (forklift approach direction) in world XY.
+        // R[0][2]=2*(qx*qz-qy*qw)=pal_z.x, R[1][2]=2*(qy*qz+qx*qw)=pal_z.y → negate for approach dir.
+        // Reads 0° when pallet faces world +X with no rotation.
+        const double wyaw_deg = std::atan2(-(2.0 * (wqy * wqz + wqx * wqw)),
+                                           -(2.0 * (wqx * wqz - wqy * wqw))) * 180.0 / M_PI;
+        ROS_INFO_STREAM_THROTTLE(1.0, "PALLET WORLD: pos=("
+                                     << wx << ", " << wy << ", " << wz << ")"
+                                     << " yaw=" << wyaw_deg << " deg");
+      }
+      catch (const tf2::TransformException &ex)
+      {
+        ROS_WARN_STREAM_THROTTLE(2.0, "TF world transform failed: " << ex.what());
+      }
     }
     else
     {
@@ -510,24 +574,25 @@ private: // MAIN CALLBACK
   // ---------------------------------------------------------------------------
 
   // Build a binary EUR/EPAL end-face template from physical block geometry (paper approach).
-  //
+  
   // Each solid region on the pallet face is defined as a rectangular block with a position
   // and size in metres, derived from the model SDF (pallet_realistic/model.sdf):
-  //
+  
   //   Top deck  : 0.80m wide × tpl_top_deck_height tall  (full width, at top)
   //   L stringer: tpl_stringer_width wide, left edge x=0
   //   C stringer: tpl_stringer_width wide, left edge x = pallet_W/2 - stringer_W/2  (= 0.35m)
   //   R stringer: tpl_stringer_width wide, right edge = pallet_W  (left edge = 0.70m)
-  //
+  
   // Fork-pocket voids fall between the stringers automatically (no explicit void blocks).
   // Row 0 = top of pallet face (smallest camera Y). Col 0 = left edge.
+  
   void buildPalletTemplate()
   {
-    const float cs  = static_cast<float>(tpl_cell_size_);
-    const float dh  = static_cast<float>(tpl_top_deck_height_);
-    const float sh  = static_cast<float>(tpl_stringer_height_);
-    const float sw  = static_cast<float>(tpl_stringer_width_);
-    const float pw  = static_cast<float>(pallet_W_);
+    const float cs = static_cast<float>(tpl_cell_size_);
+    const float dh = static_cast<float>(tpl_top_deck_height_);
+    const float sh = static_cast<float>(tpl_stringer_height_);
+    const float sw = static_cast<float>(tpl_stringer_width_);
+    const float pw = static_cast<float>(pallet_W_);
 
     template_cols_ = std::max(1, static_cast<int>(std::round(pw / cs)));
     template_rows_ = std::max(1, static_cast<int>(std::round((dh + sh) / cs)));
@@ -535,16 +600,19 @@ private: // MAIN CALLBACK
 
     // Physical solid blocks: {x0, y0, width, height} in metres.
     // x0=0 is the left edge; y0=0 is the top of the face.
-    struct Block { float x0, y0, w, h; };
+    struct Block
+    {
+      float x0, y0, w, h;
+    };
     const Block blocks[] = {
-      // Top deck — full width, top dh metres
-      {0.f,            0.f,  pw, dh},
-      // Left stringer — from SDF: collision at y=-0.35, size y=0.10 → 0-based x=0..0.10
-      {0.f,            dh,   sw, sh},
-      // Centre stringer — from SDF: collision at y=0, size y=0.10 → 0-based x=0.35..0.45
-      {pw/2.f - sw/2.f, dh,  sw, sh},
-      // Right stringer — from SDF: collision at y=+0.35, size y=0.10 → 0-based x=0.70..0.80
-      {pw - sw,        dh,   sw, sh},
+        // Top deck — full width, top dh metres
+        {0.f, 0.f, pw, dh},
+        // Left stringer — from SDF: collision at y=-0.35, size y=0.10 → 0-based x=0..0.10
+        {0.f, dh, sw, sh},
+        // Centre stringer — from SDF: collision at y=0, size y=0.10 → 0-based x=0.35..0.45
+        {pw / 2.f - sw / 2.f, dh, sw, sh},
+        // Right stringer — from SDF: collision at y=+0.35, size y=0.10 → 0-based x=0.70..0.80
+        {pw - sw, dh, sw, sh},
     };
 
     for (const auto &b : blocks)
@@ -568,7 +636,7 @@ private: // MAIN CALLBACK
 
     // Print template as ASCII art for visual verification at startup
     ROS_INFO_STREAM("Pallet template (" << template_cols_ << " cols x " << template_rows_
-                    << " rows, " << tpl_cell_size_ * 100 << "cm/cell, mu=" << template_mu_ << "):");
+                                        << " rows, " << tpl_cell_size_ * 100 << "cm/cell, mu=" << template_mu_ << "):");
     for (int r = 0; r < template_rows_; ++r)
     {
       std::string row_str;
@@ -840,6 +908,9 @@ private:
   ros::Subscriber sub_;
   ros::Publisher pose_pub_, marker_pub_, roi_pub_, no_plane_pub_;
 
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
+
   std::string cloud_topic_;
   std::string output_frame_;
 
@@ -848,10 +919,6 @@ private:
 
   // Filtering
   double voxel_leaf_;
-  bool use_sor_;
-  int sor_mean_k_;
-  double sor_stddev_;
-
   // Plane removal
   double plane_dist_thresh_;
   int plane_max_iters_;
